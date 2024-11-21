@@ -3,6 +3,7 @@
 #   correct subduction system
 # undo and redo functionality
 # save and load files
+# expand information on move mode information tab
 # introduce threading during time step simulation?
 
 # current bugs:
@@ -177,22 +178,30 @@ class ToggleButton():
         return pygame.Rect(self.x, self.y, self.width, self.height).collidepoint(mouse)
 
 class Slider():
-    def __init__(self, low=0, high=100, x=0, y=0, width=150, height=20, position=0.5):
+    def __init__(self, low=0, high=100, x=0, y=0, width=150, height=20, value=50):
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.low = low
         self.high = high
-        self.pos = position
+        self.value = value
+        self.pos = (value - low) / (high - low)
     
     def draw(self):
         pygame.draw.line(win, 0, (self.x, self.y + self.height / 2), (self.x + self.width, self.y + self.height / 2))
         pygame.draw.rect(win, (200,200,200), (self.x + self.width * self.pos - 5, self.y, 10, self.height))
         pygame.draw.rect(win, (100,100,100), (self.x + self.width * self.pos - 5, self.y, 10, self.height), 1)
     
-    def read(self):
-        return self.low + self.pos * (self.high - self.low)
+    def click(self):
+        if self.hover():
+            self.pos = (mouse[0] - self.x) / self.width
+            self.value = round(self.low + self.pos * (self.high - self.low))
+            return True
+    
+    def set(self, variable):
+        self.value = variable
+        self.pos = (self.value - self.low) / (self.high - self.low)
     
     def hover(self):
         return pygame.Rect(self.x, self.y, self.width, self.height).collidepoint(mouse)
@@ -202,9 +211,10 @@ def start():
     win = pygame.display.set_mode((screenWidth,screenHeight), pygame.RESIZABLE)
     pygame.display.set_icon(icon)
     pygame.display.set_caption("GlobeSim v0.1")
-    makeButtons()
     newGlobe(dataRes)
-    sizeDisplay()
+    makeButtons()
+    makeSliders()
+    sizeScreen()
     main()
 
 def main():
@@ -225,26 +235,25 @@ def main():
         if win.get_width() != screenWidth or win.get_height() != screenHeight:
             screenWidth = win.get_width()
             screenHeight = win.get_height()
-            sizeDisplay()
+            sizeScreen()
 
         # advance the time
         if playButtons[2].clicked:
             if time < 2000:
                 setTime(time + 1)
+                timeSlider.set(time)
             else:
                 playButtons[2].clicked = False
-
-        sizeSliders()
 
         # clicking actions
         if clicking:
             # if clicking slider
-            if checkSlider(brushSlider):
-                brushSize = checkSlider(brushSlider)
+            if brushSlider.click():
+                brushSize = brushSlider.value
                 brushN = cos(brushSize / res1)
 
-            if checkSlider(timeSlider):
-                setTime(checkSlider(timeSlider))
+            if timeSlider.click():
+                setTime(timeSlider.value)
             
             #if clicking globe
             if mouseOnGlobe:
@@ -410,9 +419,11 @@ def manageContinuousKeys():
     if keys[pygame.K_MINUS]:
         brushSize = max(int(brushSize / 1.1), 1)
         brushN = cos(brushSize / res1)
+        brushSlider.set(brushSize)
     if keys[pygame.K_EQUALS]:
         brushSize = min(max(int(brushSize * 1.1), brushSize + 1), dataRes / 2 - 1)
         brushN = cos(brushSize / res1)
+        brushSlider.set(brushSize)
 
 def changeMode(to):
     global mode, see, picking, brushColor, selectedPlate
@@ -443,7 +454,7 @@ def setTime(n):
             data[n-1]
         except IndexError:
             setTime(n-1)
-        maxTime = time
+        timeSlider.high = maxTime = time
         simulateTimeStep(n)
 
 def newGlobe(res): # generate new globe
@@ -565,6 +576,42 @@ def simulateTimeStep(n:int):
                 data[n][missingCell[0]][missingCell[1]][1] = 0 # set land type to ocean
             missing.remove(missingCell)
 
+def makeButtons():
+    global addButton, pickButton, printButton
+
+    addButton = TapButton(add1, "New Plate")
+    printButton = TapButton(print1, "Print Movements as Table")
+    pickButton = ToggleButton(pick1, pick2, 0, name="Pick Plate")
+
+    playButtons.append(TapButton(skip1, "Skip to Beginning"))
+    playButtons.append(TapButton(step1, "Back"))
+    playButtons.append(ToggleButton(play1, play2, True, name="Play"))
+    playButtons.append(TapButton(step2, "Forward"))
+    playButtons.append(TapButton(skip2, "Skip to End"))
+
+    modeButtons.append(ToggleButton(move1, move2, 0, name="Move (1)", clicked=True, ismode=True))
+    modeButtons.append(ToggleButton(drawPlate1, drawPlate2, 1, name="Draw Plates (2)", ismode=True))
+    modeButtons.append(ToggleButton(drawTerrain1, drawTerrain2, 2, name="Draw Terrain (3)", ismode=True))
+    modeButtons.append(ToggleButton(movePlate1, movePlate2, 3, name="Move Plates (4)", ismode=True))
+
+    plateButtons.append(ToggleButton(color1, color2, 0, name="Blue", clicked=True))
+    plateButtons.append(ToggleButton(color1, color2, 1, name="Green"))
+    plateButtons.append(ToggleButton(color1, color2, 2, name="Red"))
+
+    terrainButtons.append(ToggleButton(color1, color2, 0, name="Ocean", clicked=True))
+    terrainButtons.append(ToggleButton(color1, color2, 1, name="Land"))
+    terrainButtons.append(ToggleButton(color1, color2, 2, name="Mountain"))
+
+def makeSliders():
+    global brushSlider, timeSlider
+    brushSlider = Slider(1, dataRes / 2 - 1, screenWidth - rightWidth + 5, 50 + rightWidth, rightWidth - 30, 20, brushSize)
+    timeSlider = Slider(0, max(maxTime,1), leftWidth + 200, 25, screenWidth - leftWidth - rightWidth - 245, 30, time)
+
+def sizeScreen():
+    sizeDisplay()
+    sizeButtons()
+    sizeSliders()
+
 def sizeDisplay():
     global display, displayCenter, displayArrayW, displayArrayH, leftWidth, rightWidth
 
@@ -574,8 +621,6 @@ def sizeDisplay():
     display = pygame.Surface(((screenWidth - leftWidth - rightWidth) / resolution, (screenHeight - 80) / resolution))
     displayCenter = (display.get_width()/2, display.get_height()/2)
     displayArrayW, displayArrayH = range(display.get_width()), range(display.get_height()) #improve rendering
-
-    sizeButtons()
 
 def sizeButtons():
     global pickButton, addButton
@@ -609,11 +654,11 @@ def sizeButtons():
     printButton.y = 27
 
 def sizeSliders():
-    global brushSlider, timeSlider
-    brushSlider = Slider(1, dataRes / 2 - 1, screenWidth - rightWidth + 5, 50 + rightWidth, rightWidth - 30)
-    brushSlider.pos = (brushSize - brushSlider.low) / (brushSlider.high - brushSlider.low)
-    timeSlider = Slider(0, max(maxTime,1), leftWidth + 200, 25, screenWidth - leftWidth - rightWidth - 245, 30)
-    timeSlider.pos = time / max(maxTime,1)
+    brushSlider.x = screenWidth - rightWidth + 5
+    brushSlider.y = 50 + rightWidth
+    brushSlider.width = rightWidth - 30
+    timeSlider.x = leftWidth + 200
+    timeSlider.width = screenWidth - leftWidth - rightWidth - 245
 
 def drawWindow():
     win.fill((255,255,255))
@@ -787,32 +832,6 @@ def drawDisplay():
 
     win.blit(pygame.transform.scale(display, (screenWidth - leftWidth - rightWidth, screenHeight - 80)), (leftWidth,60)) #scale display to window
 
-def makeButtons():
-    global addButton, pickButton, printButton
-
-    addButton = TapButton(add1, "New Plate")
-    printButton = TapButton(print1, "Print Movements as Table")
-    pickButton = ToggleButton(pick1, pick2, 0, name="Pick Plate")
-
-    playButtons.append(TapButton(skip1, "Skip to Beginning"))
-    playButtons.append(TapButton(step1, "Back"))
-    playButtons.append(ToggleButton(play1, play2, True, name="Play"))
-    playButtons.append(TapButton(step2, "Forward"))
-    playButtons.append(TapButton(skip2, "Skip to End"))
-
-    modeButtons.append(ToggleButton(move1, move2, 0, name="Move (1)", clicked=True, ismode=True))
-    modeButtons.append(ToggleButton(drawPlate1, drawPlate2, 1, name="Draw Plates (2)", ismode=True))
-    modeButtons.append(ToggleButton(drawTerrain1, drawTerrain2, 2, name="Draw Terrain (3)", ismode=True))
-    modeButtons.append(ToggleButton(movePlate1, movePlate2, 3, name="Move Plates (4)", ismode=True))
-
-    plateButtons.append(ToggleButton(color1, color2, 0, name="Blue", clicked=True))
-    plateButtons.append(ToggleButton(color1, color2, 1, name="Green"))
-    plateButtons.append(ToggleButton(color1, color2, 2, name="Red"))
-
-    terrainButtons.append(ToggleButton(color1, color2, 0, name="Ocean", clicked=True))
-    terrainButtons.append(ToggleButton(color1, color2, 1, name="Land"))
-    terrainButtons.append(ToggleButton(color1, color2, 2, name="Mountain"))
-
 def checkAllButtons():
     global brushColor, plateColor, terrainColor, picking
 
@@ -821,16 +840,20 @@ def checkAllButtons():
 
     if playButtons[0].hover():
         setTime(0)
+        timeSlider.set(time)
     if playButtons[1].hover():
         if time > 0:
             setTime(time-1)
+            timeSlider.set(time)
     if playButtons[2].hover():
         playButtons[2].clicked = not playButtons[2].clicked
     if playButtons[3].hover():
         if time < 2000:
             setTime(time+1)
+            timeSlider.set(time)
     if playButtons[4].hover():
         setTime(maxTime)
+        timeSlider.set(time)
 
     if mode == 1:
         if pickButton.hover():
@@ -867,11 +890,6 @@ def checkButtons(group):
             offButtons(group)
             group[n].clicked = True
             return n + 1
-
-def checkSlider(slider:Slider):
-    if slider.hover():
-        slider.pos = (mouse[0] - slider.x) / slider.width
-        return int(slider.low + slider.pos * (slider.high - slider.low))
 
 def readButtons(group):
     for button in group:
