@@ -1,12 +1,12 @@
-
 # to do:
-# simulateTimeStep function! that is, move plates, fill them in, and create landmasses!
+# simulateTimeStep function:
+#   correct subduction system
 # undo and redo functionality
 # save and load files
+# introduce threading during time step simulation?
 
 # current bugs:
-# none known at this date!
-# key disabling works now... mostly (mouse is still broken)
+# left-click mouse automatically activates after closing tkinter windows
 
 import tkwindow
 import pygame, sys, random
@@ -54,26 +54,23 @@ letterWidths = {" ": 4.4453125, "!": 4.4453125, '"': 5.6796875, "#": 8.8984375, 
 "h": 8.8984375, "i": 3.5546875, "j": 3.5546875, "k": 8, "l": 3.5546875, "m": 13.328125, "n": 8.8984375, "o": 8.8984375, "p": 8.8984375, "q": 8.8984375,
 "r": 5.328125, "s": 8, "t": 4.4453125, "u": 8.8984375, "v": 8, "w": 11.5546875, "x": 8, "y": 8, "z": 8, "{": 5.34375, "|": 4.15625, "}": 5.34375, "~": 9.34375}
 
-disableKeys = 0
 run = True
-time = 0
-maxTime = 0
 mode = 0
+fps = 20
 gfps = 20
+disableKeys = False
+
+resolution = 3
+dataRes = 1000  # multiple of twos recommended. processing time increases expentially.
+res1 = dataRes / pi  # constant used for radians-to-cells conversion
 
 screenWidth = 800
 screenHeight = 500
 leftWidth = 100
 rightWidth = 100
 
-resolution = 3
-dataRes = 1000  # multiple of twos recommended. processing time increases expentially.
-res1 = dataRes / pi  # constant used for radians-to-cells conversion
-
-coordinates = []
-data = [[]]
-plateData = [[255, 65280, 16711680],[[[0], [(0, 0, 1)], [0]],[[0], [(0, 0, 1)], [0]],[[0], [(0, 0, 1)], [0]]], [[],[],[]]]
-# [colors], [movement data: [[startTimes], [poles], [speeds]]], [density coefficient tables]
+time = 0
+maxTime = 0
 
 see = 0
 seeDict = [-1, 0, 1, 0]
@@ -86,26 +83,34 @@ position = [0,0]
 mouseTransform = [0,0]
 scrollSpeed = 100
 
+clicking = False
+picking = False
+panning = False
+mouseOnGlobe = False
+
 mouse = [0,0]
 displayMouse = [0,0]
 mouseVector = [0,0]
 mouseSpherical = [0,0]
-mouseCell = False
-clicking = False
-picking = False
-
-plateSelect = []
-
-modeButtons = []
-playButtons = [] #different types!
-plateButtons = []
-terrainButtons = []
+mouseCell = None
 
 brushColor = 0
 brushSize = 50
 brushN = cos(brushSize / res1)
 plateColor = 0
 terrainColor = 0
+
+selectedPlate = []
+
+modeButtons = []
+playButtons = [] #different types!
+plateButtons = []
+terrainButtons = []
+
+coordinates = []
+data = [[]]
+plateData = [[255, 65280, 16711680],[[[0], [(0, 0, 1)], [0]],[[0], [(0, 0, 1)], [0]],[[0], [(0, 0, 1)], [0]]], [[],[],[]]]
+# [colors], [movement data: [[startTimes], [poles], [speeds]]], [density coefficient tables]
 
 class TapButton():
     def __init__(self, img, name=None):
@@ -203,141 +208,18 @@ def start():
     main()
 
 def main():
-    global run, disableKeys
+    global fps
     global screenWidth, screenHeight
-    global zoom, position, mouseTransform
-    global clicking, picking
-    global brushColor, brushSize, brushN, plateColor
-    global plateSelect
-
-    pan = False
+    global brushSize, brushN
+    global mouseTransform
 
     while run:
         fps = mainClock.get_fps()
         if not fps: 
             fps = gfps
-        moveSpeed = scrollSpeed / zoom / fps
 
         manageMouse()
-        
-        for event in pygame.event.get():
-            if disableKeys:
-                break
-            if event.type == pygame.QUIT: # closing window
-                run = False
-            elif event.type == pygame.KEYDOWN: # one-time key presses
-                if event.key == pygame.K_ESCAPE: # esc
-                    run = False
-                elif event.key > 48 and event.key < 53: # mode numbers - 1 to 4
-                    changeMode(event.key - 49)
-                elif event.key == pygame.K_LCTRL: # ctrl
-                    pan = True
-                elif event.key == pygame.K_p: #admin command for testing time seperation
-                    print(data)
-                elif event.key == pygame.K_x:
-                    if mode == 3 and plateSelect:
-                        plateData[0][plateSelect[1]] += plateSelect[2]
-                        plateSelect = []
-            
-            elif event.type == pygame.KEYUP:
-                if event.key == pygame.K_LCTRL:
-                    pan = False
-                    position = [position[0] + mouseTransform[0], position[1] + mouseTransform[1]]
-                    mouseTransform = [0,0]
-            
-            elif event.type == pygame.MOUSEBUTTONDOWN: # mouse stuff
-                if event.button == 1: #left click
-                    clicking = True
-                    checkAllButtons() # if clicking button
-                    if mouseCell:
-                        if mode == 0 or pan:
-                            clickLoc = mouseSpherical
-                        elif mode == 3:
-                            if plateSelect:
-                                try:
-                                    try:
-                                        indx = plateData[1][plateSelect[1]][0].index(time) # check if time already exists
-                                        plateData[1][plateSelect[1]][1][indx] = normalize(CROSS(plateSelect[0],mouseVector)) # if so, replace motion
-                                        plateData[1][plateSelect[1]][2][indx] = -acos(DOT3(plateSelect[0],mouseVector))
-                                    except ValueError:
-                                        indx = getMovementIndex(plateSelect[1], time) + 1 # get insertion index of new motion
-                                        plateData[1][plateSelect[1]][0].insert(indx, time) # insert start time in correct location
-                                        plateData[1][plateSelect[1]][1].insert(indx, normalize(CROSS(plateSelect[0],mouseVector))) # insert pole in correct loc
-                                        plateData[1][plateSelect[1]][2].insert(indx, -acos(DOT3(plateSelect[0],mouseVector))) # insert speed in correct loc
-                                except (ZeroDivisionError, TypeError): pass
-                                else:
-                                    simulateFutureTimesteps(time)
-                            else:
-                                clickedplate = data[time][trunc(mouseSpherical[0] * res1)][trunc(mouseSpherical[1] * res1)][0]
-                                plateSelect = [mouseVector, clickedplate, colorFraction(plateData[0][clickedplate], 5)]
-                                plateData[0][plateSelect[1]] -= plateSelect[2]
-                        elif picking:
-                            clicking = picking = pickButton.clicked = False
-                            brushColor = mouseCell[0]
-                            offButtons(plateButtons)
-                            plateButtons[brushColor].clicked = True
-                
-                elif event.button == 2: # middle click
-                    if mouseCell:
-                        clicking = pan = True
-                        clickLoc = mouseSpherical
-                
-                elif event.button == 3: # right click
-                    if mode == 1 and checkButtons(plateButtons) and len(plateButtons) > 1:
-                        button = checkButtons(plateButtons) - 1
-                        del plateButtons[button]
-                        del plateData[0][button]
-                        del plateData[1][button]
-                        del plateData[2][button]
-                        if brushColor >= button:
-                            brushColor = plateColor = max(plateColor - 1, 0)
-                        plateButtons[plateColor].clicked = True
-                        sizeButtons()
-                
-                elif event.button == 4: #scrolling up
-                    zoom *= 1 + scrollSpeed / 100 / fps
-                
-                elif event.button == 5: #scrolling down
-                    if zoom >= minZoom:
-                        zoom /= 1 + scrollSpeed / 100 / fps
-            
-            if event.type == pygame.MOUSEBUTTONUP:
-                if event.button == 1: #left click
-                    clicking = False
-                    if (mode == 0 or pan):
-                        position = [fixPos(position[0] + mouseTransform[0]), fixPos(position[1] + mouseTransform[1])]
-                        mouseTransform = [0,0]
-                elif event.button == 2: # middle click
-                    clicking = pan = False
-                    position = [position[0] + mouseTransform[0], position[1] + mouseTransform[1]]
-                    mouseTransform = [0,0]
-
-        if disableKeys:
-            disableKeys -= 1
-
-        # continuous key presses
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_RIGHTBRACKET]:
-            zoom *= 1 + scrollSpeed / 100 / fps
-        if keys[pygame.K_LEFTBRACKET]:
-            if zoom >= 64:
-                zoom /= 1 + scrollSpeed / 100 / fps
-        if keys[pygame.K_RIGHT]:
-            position[0] = fixPos(position[0] - moveSpeed)
-        if keys[pygame.K_LEFT]:
-            position[0] = fixPos(position[0] + moveSpeed)
-        if keys[pygame.K_UP]:
-            position[1] = fixPos(position[1] - moveSpeed)
-        if keys[pygame.K_DOWN]:
-            position[1] = fixPos(position[1] + moveSpeed)
-        if keys[pygame.K_MINUS]:
-            brushSize = max(int(brushSize / 1.1), 1)
-            brushN = cos(brushSize / res1)
-            sizeSliders()
-        if keys[pygame.K_EQUALS]:
-            brushSize = min(max(int(brushSize * 1.1), brushSize + 1), dataRes / 2 - 1)
-            brushN = cos(brushSize / res1)
-            sizeSliders()
+        manageAllKeys()
 
         # resize if necessary
         if win.get_width() != screenWidth or win.get_height() != screenHeight:
@@ -345,13 +227,15 @@ def main():
             screenHeight = win.get_height()
             sizeDisplay()
 
+        # advance the time
         if playButtons[2].clicked:
             if time < 2000:
                 setTime(time + 1)
-                sizeSliders()
             else:
                 playButtons[2].clicked = False
-    
+
+        sizeSliders()
+
         # clicking actions
         if clicking:
             # if clicking slider
@@ -363,9 +247,9 @@ def main():
                 setTime(checkSlider(timeSlider))
             
             #if clicking globe
-            if mouseCell:
+            if mouseOnGlobe:
                 try:
-                    if (mode == 0 or pan):
+                    if (mode == 0 or panning):
                         mouseLoc = mouseSpherical
                         mouseTransform = [(clickLoc[1] - mouseLoc[1]), (mouseLoc[0] - clickLoc[0]) * ((abs(pi - abs(fixPos(clickLoc[1] - pi/2) - position[0])) > pi/2) * 2 - 1)]
                         # Imperfect fix for upside-down latitudinal rotation. May be removed for simplicity
@@ -379,27 +263,166 @@ def main():
         mainClock.tick(gfps)
 
 def manageMouse():
-    global mouse, displayMouse, mouseVector, mouseSpherical, mouseCell
+    global mouse, displayMouse, mouseVector, mouseSpherical, mouseCell, mouseOnGlobe
 
     mouse = pygame.mouse.get_pos()
     displayMouse = ((mouse[0] - leftWidth) // resolution, (mouse[1] - 60) // resolution)
-
-    try:
+    
+    if displayMouse[0] > 0 and mouse[0] < screenWidth - rightWidth and displayMouse[1] > 0 and mouse[1] < screenHeight - 20 and sqrt(((displayMouse[0] - displayCenter[0])**2) + ((displayMouse[1] - displayCenter[1])**2)) < zoom:
+        mouseOnGlobe = True
         mouseVector = pixel3d(displayMouse)
         mouseSpherical = vtoSpherical(mouseVector)
         mouseCell = data[time][trunc(mouseSpherical[0] * res1)][trunc(mouseSpherical[1] * res1 * sin(mouseSpherical[0]))].copy()
-    except:
-        mouseCell = False
+    else:
+        mouseOnGlobe = False
+
+def manageAllKeys():
+    global disableKeys
+
+    manageKeyEvents()
+    manageContinuousKeys()
+
+    if disableKeys:
+        disableKeys -= 1
+
+def manageKeyEvents():
+    global run
+    global clicking, picking, panning
+    global selectedPlate, clickLoc
+    global zoom, position, mouseTransform
+    global brushColor, plateColor
+
+    for event in pygame.event.get():
+        if disableKeys:
+            break
+        
+        if event.type == pygame.QUIT: # closing window
+            run = False
+        
+        elif event.type == pygame.KEYDOWN: # one-time key presses
+            if event.key == pygame.K_ESCAPE: # esc
+                run = False
+            elif event.key > 48 and event.key < 53: # mode numbers - 1 to 4
+                changeMode(event.key - 49)
+            elif event.key == pygame.K_LCTRL: # ctrl
+                panning = True
+            elif event.key == pygame.K_p: #admin command for testing time seperation
+                print(data)
+            elif event.key == pygame.K_x: # exit plate mover
+                if mode == 3 and selectedPlate:
+                    plateData[0][selectedPlate[1]] += selectedPlate[2]
+                    selectedPlate = []
+            
+        elif event.type == pygame.KEYUP:
+            if event.key == pygame.K_LCTRL:
+                panning = False
+                position = [position[0] + mouseTransform[0], position[1] + mouseTransform[1]]
+                mouseTransform = [0,0]
+            
+        elif event.type == pygame.MOUSEBUTTONDOWN: # mouse stuff
+            if event.button == 1: #left click
+                clicking = True
+                checkAllButtons() # if clicking button
+                if mouseOnGlobe:
+                    if mode == 0 or panning:
+                        clickLoc = mouseSpherical
+                    elif mode == 3:
+                        if selectedPlate:
+                            try:
+                                try:
+                                    indx = plateData[1][selectedPlate[1]][0].index(time) # check if time already exists
+                                    plateData[1][selectedPlate[1]][1][indx] = normalize(CROSS(selectedPlate[0],mouseVector)) # if so, replace motion
+                                    plateData[1][selectedPlate[1]][2][indx] = -acos(DOT3(selectedPlate[0],mouseVector))
+                                except ValueError:
+                                    indx = getMovementIndex(selectedPlate[1], time) + 1 # get insertion index of new motion
+                                    plateData[1][selectedPlate[1]][0].insert(indx, time) # insert start time in correct location
+                                    plateData[1][selectedPlate[1]][1].insert(indx, normalize(CROSS(selectedPlate[0],mouseVector))) # insert pole in correct loc
+                                    plateData[1][selectedPlate[1]][2].insert(indx, -acos(DOT3(selectedPlate[0],mouseVector))) # insert speed in correct loc
+                            except (ZeroDivisionError, TypeError): pass
+                            else:
+                                simulateFutureTimesteps(time)
+                        else:
+                            selectedPlate = [mouseVector, mouseCell[0], colorFraction(plateData[0][mouseCell[0]], 5)]
+                            plateData[0][selectedPlate[1]] -= selectedPlate[2]
+                    elif picking:
+                        clicking = picking = pickButton.clicked = False
+                        brushColor = mouseCell[0]
+                        offButtons(plateButtons)
+                        plateButtons[brushColor].clicked = True
+                
+            elif event.button == 2: # middle click
+                if mouseOnGlobe:
+                    clicking = panning = True
+                    clickLoc = mouseSpherical
+                
+            elif event.button == 3: # right click
+                if mode == 1 and checkButtons(plateButtons) and len(plateButtons) > 1:
+                    button = checkButtons(plateButtons) - 1
+                    del plateButtons[button]
+                    del plateData[0][button]
+                    del plateData[1][button]
+                    del plateData[2][button]
+                    if brushColor >= button:
+                        brushColor = plateColor = max(plateColor - 1, 0)
+                    plateButtons[plateColor].clicked = True
+                    sizeButtons()
+                
+            elif event.button == 4: #scrolling up
+                zoom *= 1 + scrollSpeed / 100 / fps
+                
+            elif event.button == 5: #scrolling down
+                if zoom >= minZoom:
+                    zoom /= 1 + scrollSpeed / 100 / fps
+            
+        if event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1: #left click
+                clicking = False
+                if (mode == 0 or panning):
+                    position = [fixPos(position[0] + mouseTransform[0]), fixPos(position[1] + mouseTransform[1])]
+                    mouseTransform = [0,0]
+            elif event.button == 2: # middle click
+                clicking = panning = False
+                position = [position[0] + mouseTransform[0], position[1] + mouseTransform[1]]
+                mouseTransform = [0,0]
+
+def manageContinuousKeys():
+    global zoom
+    global brushSize, brushN
+
+    moveSpeed = scrollSpeed / zoom / fps
+    keys = pygame.key.get_pressed()
+    
+    if keys[pygame.K_RIGHTBRACKET]:
+        zoom *= 1 + scrollSpeed / 100 / fps
+    if keys[pygame.K_LEFTBRACKET]:
+        if zoom >= 64:
+            zoom /= 1 + scrollSpeed / 100 / fps
+    
+    if keys[pygame.K_RIGHT]:
+        position[0] = fixPos(position[0] - moveSpeed)
+    if keys[pygame.K_LEFT]:
+        position[0] = fixPos(position[0] + moveSpeed)
+    if keys[pygame.K_UP]:
+        position[1] = fixPos(position[1] - moveSpeed)
+    if keys[pygame.K_DOWN]:
+        position[1] = fixPos(position[1] + moveSpeed)
+    
+    if keys[pygame.K_MINUS]:
+        brushSize = max(int(brushSize / 1.1), 1)
+        brushN = cos(brushSize / res1)
+    if keys[pygame.K_EQUALS]:
+        brushSize = min(max(int(brushSize * 1.1), brushSize + 1), dataRes / 2 - 1)
+        brushN = cos(brushSize / res1)
 
 def changeMode(to):
-    global mode, see, picking, brushColor, plateSelect
+    global mode, see, picking, brushColor, selectedPlate
     mode = to
 
     picking = pickButton.clicked = False
 
-    if plateSelect:
-        plateData[0][plateSelect[1]] += plateSelect[2]
-        plateSelect = []
+    if selectedPlate:
+        plateData[0][selectedPlate[1]] += selectedPlate[2]
+        selectedPlate = []
 
     if seeDict[mode] + 1: #change visual to appropriate one, unless moving
         see = seeDict[mode]
@@ -460,7 +483,7 @@ def simulateTimeStep(n:int):
 
     for table in plateData[2]: # update the density coeeficient table for each plate
         if table == []:
-            table.append(random.random())
+            table.append(random.random()*2-1)
         for i in range(len(table), maxTime+1):
             table.append(table[-1] * 0.9 + random.random() * 0.2 - 0.1) # randomized increase or decrease, centered toward 0
 
@@ -494,22 +517,10 @@ def simulateTimeStep(n:int):
                         cell[3] += 1
                         data[n][cellLat][cellLon] = cell
                     elif cell[1] == newcell[1]: # cells are same crust type
-                        age = cell[3] - newcell[3] #difference in ages; positive when the pasted cell is older
-                        if age < 0:
-                            if random.random() > 0.5**(-age):
-                                data[n][cellLat][cellLon] = [cell[0], min(2, cell[1] + 1), 0, cell[3] + 1] # if success, replace cell
-                            else:
-                                data[n][cellLat][cellLon][1] = min(2, cell[1] + 1) # otherwise, goes under cell (underlying plate not yet implemented)
-                        elif age == 0:
-                            if random.random() < 0.5:
-                                data[n][cellLat][cellLon] = [cell[0], min(2, cell[1] + 1), 0, cell[3] + 1]
-                            else:
-                                data[n][cellLat][cellLon][1] = min(2, cell[1] + 1)
+                        if cell[3] + plateData[2][cell[0]][n] < newcell[3] + plateData[2][newcell[0]][n]: # age + density coefficient must be lower
+                            data[n][cellLat][cellLon] = [cell[0], min(2, cell[1] + 1), 0, cell[3] + 1] # replace current cell
                         else: 
-                            if random.random() < 0.5**age:
-                                data[n][cellLat][cellLon] = [cell[0], min(2, cell[1] + 1), 0, cell[3] + 1]
-                            else:
-                                data[n][cellLat][cellLon][1] = min(2, cell[1] + 1)
+                            data[n][cellLat][cellLon][1] = min(2, cell[1] + 1) # current cell stays
                 else: # not filled
                     cell[3] += 1
                     data[n][cellLat][cellLon] = cell
@@ -554,7 +565,6 @@ def simulateTimeStep(n:int):
                 data[n][missingCell[0]][missingCell[1]][1] = 0 # set land type to ocean
             missing.remove(missingCell)
 
-
 def sizeDisplay():
     global display, displayCenter, displayArrayW, displayArrayH, leftWidth, rightWidth
 
@@ -566,7 +576,6 @@ def sizeDisplay():
     displayArrayW, displayArrayH = range(display.get_width()), range(display.get_height()) #improve rendering
 
     sizeButtons()
-    sizeSliders()
 
 def sizeButtons():
     global pickButton, addButton
@@ -632,7 +641,10 @@ def drawMenu():
         drawText(str(brushSize), arial, 0, screenWidth - 20, rightWidth + 53)
     
     if mode == 0:
-        drawText("Current Cell: " + str(mouseCell), arial, 0, screenWidth - rightWidth + 5, 65)
+        if mouseOnGlobe:
+            drawText("Current Cell: " + str(mouseCell), arial, 0, screenWidth - rightWidth + 5, 65)
+        else:
+            drawText("Current Cell: None", arial, 0, screenWidth - rightWidth + 5, 65)
     
     elif mode == 1:
         pygame.draw.circle(win, plateData[0][brushColor], (screenWidth - rightWidth / 2, rightWidth / 2 + 40), brushSize / dataRes * (rightWidth - 10))
@@ -662,19 +674,19 @@ def drawMenu():
         drawText("Current Speed", arial, 0, screenWidth - rightWidth + 10, 165)
         drawText("New Pole", arial, 0, screenWidth - rightWidth + 10, 195)
         drawText("New Speed", arial, 0, screenWidth - rightWidth + 10, 215)
-        if plateSelect:
-            movementID = getMovementIndex(plateSelect[1], time)
-            drawText(str(plateSelect[1]), arial, 0, midRight + 10, 55)
-            drawText(str(plateData[0][plateSelect[1]]), arial, 0, midRight + 10, 75)
-            drawText(str(plateData[1][plateSelect[1]][0][0]), arial, 0, midRight + 10, 95)
-            drawText(str(plateData[1][plateSelect[1]][0][-1]), arial, 0, midRight + 10, 115)
-            currentpole = plateData[1][plateSelect[1]][1][movementID]
+        if selectedPlate:
+            movementID = getMovementIndex(selectedPlate[1], time)
+            drawText(str(selectedPlate[1]), arial, 0, midRight + 10, 55)
+            drawText(str(plateData[0][selectedPlate[1]]), arial, 0, midRight + 10, 75)
+            drawText(str(plateData[1][selectedPlate[1]][0][0]), arial, 0, midRight + 10, 95)
+            drawText(str(plateData[1][selectedPlate[1]][0][-1]), arial, 0, midRight + 10, 115)
+            currentpole = plateData[1][selectedPlate[1]][1][movementID]
             drawText(str((round(currentpole[0],2), round(currentpole[1],2), round(currentpole[2],2))), arial, 0, midRight + 10, 145)
-            drawText(str(round(plateData[1][plateSelect[1]][2][movementID], 2)), arial, 0, midRight + 10, 165)
+            drawText(str(round(plateData[1][selectedPlate[1]][2][movementID], 2)), arial, 0, midRight + 10, 165)
             try:
-                newpole = normalize(CROSS(plateSelect[0],mouseVector))
+                newpole = normalize(CROSS(selectedPlate[0],mouseVector))
                 drawText(str((round(newpole[0],2), round(newpole[1],2), round(newpole[2],2))), arial, 0, midRight + 10, 195)
-                drawText(str(round(acos(DOT3(plateSelect[0],mouseVector)), 2)), arial, 0, midRight + 10, 215)
+                drawText(str(round(acos(DOT3(selectedPlate[0],mouseVector)), 2)), arial, 0, midRight + 10, 215)
             except:
                 s = pygame.Surface((rightWidth, 40)) # grey cover to indicate not in use
                 s.set_alpha(128)
@@ -688,8 +700,11 @@ def drawMenu():
             s.fill((255,255,255))
             win.blit(s, (screenWidth - rightWidth, 20))
         drawText("Plate Info:", arialBold, 0, screenWidth - rightWidth + 5, 30)
-
-    drawText("Mouse: (lat: "+str(round((mouseSpherical[0]-mouseTransform[1])/pi*180-90,2))+", lon: "+str(round(-fixPos(mouseSpherical[1]+mouseTransform[0]-pi/2)/pi*180,2))+")", arial, 0, leftWidth + 10, screenHeight - 17)
+    
+    if mouseOnGlobe:
+        drawText("Mouse: (lat: "+str(round((mouseSpherical[0]-mouseTransform[1])/pi*180-90,2))+", lon: "+str(round(-fixPos(mouseSpherical[1]+mouseTransform[0]-pi/2)/pi*180,2))+")", arial, 0, leftWidth + 10, screenHeight - 17)
+    else: 
+        drawText("Mouse: Not on Globe", arial, 0, leftWidth + 10, screenHeight - 17)
     drawText("Location: (lat: "+str(round(-(position[1]+mouseTransform[1])/pi*180,2))+", lon: "+str(round(-(position[0]+mouseTransform[0])/pi*180,2))+")", arial, 0, screenWidth // 2 - 90, screenHeight - 17)
     drawText("Zoom: "+str(round(zoom/minZoom*100))+"%", arial, 0, screenWidth - rightWidth - 75, screenHeight - 17)
 
@@ -761,11 +776,11 @@ def drawDisplay():
     drawLine(tmp, normalize((0.001,0,1)), normalize((0.001,0,-1)), 1000, (255,255,255,3))
     drawLine(tmp, normalize((-0.001,0,1)), normalize((-0.001,0,-1)), 1000, (255,255,255,3))
 
-    if plateSelect:
+    if selectedPlate:
         try:
-            movementID = getMovementIndex(plateSelect[1], time) #index of plate's current movement
-            drawLine(tmp, None, plateSelect[0], 1000, (150,0,0,1), plateData[1][plateSelect[1]][1][movementID], plateData[1][plateSelect[1]][2][movementID]) # draw current movement
-            drawLine(tmp, mouseVector, plateSelect[0], 1000, (220,200,0,1)) # draw new movement
+            movementID = getMovementIndex(selectedPlate[1], time) #index of plate's current movement
+            drawLine(tmp, None, selectedPlate[0], 1000, (150,0,0,1), plateData[1][selectedPlate[1]][1][movementID], plateData[1][selectedPlate[1]][2][movementID]) # draw current movement
+            drawLine(tmp, mouseVector, selectedPlate[0], 1000, (220,200,0,1)) # draw new movement
         except: pass
 
     tmp.close()
@@ -806,20 +821,16 @@ def checkAllButtons():
 
     if playButtons[0].hover():
         setTime(0)
-        sizeSliders()
     if playButtons[1].hover():
         if time > 0:
             setTime(time-1)
-            sizeSliders()
     if playButtons[2].hover():
         playButtons[2].clicked = not playButtons[2].clicked
     if playButtons[3].hover():
         if time < 2000:
             setTime(time+1)
-            sizeSliders()
     if playButtons[4].hover():
         setTime(maxTime)
-        sizeSliders()
 
     if mode == 1:
         if pickButton.hover():
@@ -845,9 +856,9 @@ def checkAllButtons():
         if checkButtons(terrainButtons):
             terrainColor = brushColor = readButtons(terrainButtons)
     elif mode == 3:
-        if plateSelect:
+        if selectedPlate:
             if printButton.hover():
-                movementTable(plateSelect[1])
+                movementTable(selectedPlate[1])
 
 def checkButtons(group):
     "Clicks toggle button in a group, and returns the index of that button in the list + 1."
